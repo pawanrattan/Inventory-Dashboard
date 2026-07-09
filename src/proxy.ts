@@ -1,19 +1,7 @@
-/**
- * Next.js Middleware
- * ==================
- * Protects API routes by verifying the JWT cookie.
- *
- * Public routes (no auth required):
- * - POST /api/auth/login
- * - POST /api/auth/register
- * - POST /api/users/register (temporary — until admin-only restriction is added)
- *
- * All other /api/* routes require a valid JWT token in the "token" cookie.
- * Decoded user info is forwarded via request headers for route handlers to consume.
- */
 
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/jwt";
+import { errorResponse } from "@/lib/apiResponse";
 
 // ─── Public Routes (no auth required) ───────────────────────────────────────
 
@@ -23,9 +11,9 @@ const PUBLIC_ROUTES = [
   "/api/users/register",
 ];
 
-// ─── Middleware Function ─────────────────────────────────────────────────────
+// ─── Proxy Function ─────────────────────────────────────────────────────────
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Skip non-API routes (pages, static assets, etc.)
@@ -38,14 +26,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Get token from cookie
-  const token = request.cookies.get("token")?.value;
+  // Get token from Authorization header
+  const authHeader = request.headers.get("authorization");
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
   if (!token) {
-    return NextResponse.json(
-      { sucess: false, message: "Authentication required. Please login." },
-      { status: 401 }
-    );
+    return errorResponse("Authentication required. Please login.", 401);
   }
 
   // Verify the token
@@ -66,14 +52,12 @@ export function middleware(request: NextRequest) {
       },
     });
   } catch {
-    return NextResponse.json(
-      { sucess: false, message: "Invalid or expired token. Please login again." },
-      { status: 401 }
-    );
+    return errorResponse("Invalid or expired token. Please login again.", 401);
   }
 }
 
 // ─── Matcher Config ──────────────────────────────────────────────────────────
+// Filters Proxy to run only on API routes
 
 export const config = {
   matcher: "/api/:path*",

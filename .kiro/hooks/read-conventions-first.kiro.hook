@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Read Conventions Before Changes",
+  "description": "Before any write operation (file creation or editing), the agent reads CONVENTIONS.md and genesis-DESIGN.md to ensure all changes follow project standards and design guidelines.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "write"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before making this change, read and follow the project conventions in CONVENTIONS.md and the design guidelines in genesis-DESIGN.md at the project root. Ensure your change is consistent with the layered architecture, naming conventions, patterns described in CONVENTIONS.md, and the visual design system (colors, typography, spacing, components, elevation) described in genesis-DESIGN.md."
+  }
+}

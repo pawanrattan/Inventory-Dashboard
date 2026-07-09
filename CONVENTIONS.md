@@ -37,15 +37,32 @@ Step 3: Set Permissions    → Module checkboxes (auto-suggest based on departme
 Step 4: Fill Details       → employee_id, name, email, password
 ```
 
-### Login Flow
+### Login Flow (Implemented)
 
 ```
 User enters Employee ID + Password (only 2 fields)
   ↓
-System finds user → checks password → gets role + department + permissions
+Route Handler validates with Zod → calls authService.loginUser()
   ↓
-Returns JWT with: userId, employeeId, role, department, permissions
+Service: findUserByEmployeeId → check is_active → comparePassword
+  ↓
+Service: fetch role → fetch department → fetch module permissions
+  ↓
+Service: update last_login → sign JWT token
+  ↓
+Route Handler: set token as HTTP-only cookie → return user data + permissions
 ```
+
+**JWT Payload contents:**
+```ts
+{ userId, employeeId, name, roleId, departmentId }
+```
+
+**Cookie settings:**
+- `httpOnly: true` — JavaScript cannot access it (XSS protection)
+- `secure: true` in production (HTTPS only)
+- `sameSite: "strict"` — prevents CSRF
+- `maxAge` — parsed from `JWT_EXPIRES_IN` env var (e.g., "8h", "7d")
 
 ### Seeding the First Admin
 
@@ -229,7 +246,150 @@ try {
 
 ---
 
+## Authentication Proxy — `src/proxy.ts`
+
+### How it works
+
+In Next.js 16, Middleware has been renamed to **Proxy**. The file is `src/proxy.ts` and exports a `proxy()` function. It runs **before** every matched request, intercepts all `/api/*` routes, verifies the JWT from the `Authorization: Bearer <token>` header, and injects decoded user info into request headers.
+
+### Public routes (no auth required)
+
+```
+POST /api/auth/login
+POST /api/auth/register
+POST /api/users/register (temporary — until admin-only restriction)
+```
+
+### Flow
+
+```
+Request hits /api/* route
+  ↓
+proxy.ts intercepts
+  ↓ checks if public route → if yes, pass through
+  ↓ reads Authorization: Bearer <token> header
+  ↓ if no token → returns 401
+  ↓ verifies token with jsonwebtoken
+  ↓ if invalid/expired → returns 401
+  ↓ injects decoded user into request headers:
+      x-user-id, x-employee-id, x-user-name, x-role-id, x-department-id
+  ↓
+Route handler receives enriched request
+```
+
+### Reading user in route handlers
+
+```ts
+// In any protected route handler:
+const userId = Number(request.headers.get("x-user-id"));
+const employeeId = request.headers.get("x-employee-id");
+const name = request.headers.get("x-user-name");
+const roleId = Number(request.headers.get("x-role-id"));
+const departmentId = Number(request.headers.get("x-department-id"));
+```
+
+### Rules
+- **Never** verify JWT manually in route handlers — proxy already did it
+- Public routes must be added to `PUBLIC_ROUTES` array in `proxy.ts`
+- Token is stored in an HTTP-only cookie (not localStorage) for security
+- The `config.matcher` restricts proxy to `/api/:path*` only
+
+---
+
+## JWT Utility — `src/lib/jwt.ts`
+
+Handles token creation and verification using `jsonwebtoken`.
+
+```ts
+import { signToken, verifyToken, JwtPayload } from "@/lib/jwt";
+
+// Create token (used in login service)
+const token = signToken({ userId, employeeId, name, roleId, departmentId });
+
+// Verify token (used in middleware)
+const decoded = verifyToken(token); // throws if invalid
+```
+
+---
+
+## Password Utility — `src/lib/password.ts`
+
+Handles password comparison using `bcryptjs`. Separated for reusability and testability.
+
+```ts
+import { comparePassword } from "@/lib/password";
+
+const isValid = comparePassword(plainPassword, storedHash); // returns boolean
+```
+
+---
+
 ## Implemented APIs
+
+### POST /api/auth/login
+
+**Purpose:** Authenticate a user and return their profile + permissions + set cookie.
+
+**Authentication:** None required (public route).
+
+**Request Body:**
+```json
+{
+  "employee_id": "EMP001",
+  "password": "Admin@2026"
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "sucess": true,
+  "message": "Login successful",
+  "data": {
+    "user": {
+      "id": 1,
+      "employee_id": "EMP001",
+      "name": "Pawan Rattan",
+      "email": "pawan@rattanindia.com",
+      "is_active": true,
+      "last_login": "2026-07-09T...",
+      "created_at": "2026-07-08T..."
+    },
+    "role": { "id": 1, "role_name": "Admin" },
+    "department": { "id": 7, "department_name": "Administration" },
+    "permissions": [
+      { "module_name": "Dashboard", "can_view": true, "can_create": true, "can_edit": true, "can_delete": true }
+    ],
+    "token": "eyJhbGciOi..."
+  }
+}
+```
+
+**Error Responses:**
+| Status | When |
+|--------|------|
+| 400 | Validation failed (missing employee_id or password) |
+| 401 | Invalid credentials or inactive account |
+| 500 | Unexpected server error |
+
+**Internal Flow:**
+```
+Route (Zod validate) → authService.loginUser()
+                         │
+                         ├── findUserByEmployeeId()
+                         ├── Check is_active
+                         ├── comparePassword()
+                         ├── getRoleById()
+                         ├── getDepartmentById()
+                         ├── getModulePermissionsByDepartmentId()
+                         ├── updateLastLogin()
+                         ├── signToken()
+                         └── Return { user, role, department, permissions, token }
+                              ↓
+Route: Set "token" cookie (httpOnly, secure, strict) → successResponse
+```
+
+---
 
 ### POST /api/users/register
 
@@ -355,18 +515,26 @@ Modules: Planning, Purchase, Inventory, Production, Sales, Finance, Dashboard
 src/
 ├── app/
 │   └── api/
+│       ├── auth/
+│       │   └── login/
+│       │       └── route.ts        ← Login endpoint (sets cookie)
 │       └── users/
 │           └── register/
-│               └── route.ts        ← API route handler
+│               └── route.ts        ← User registration endpoint
 ├── lib/
 │   ├── apiClient.ts                ← Axios instance (frontend)
 │   ├── apiResponse.ts              ← successResponse / errorResponse helpers
 │   ├── db.ts                       ← MySQL pool + query() helper
-│   └── env.ts                      ← Environment variable access (lazy getters)
+│   ├── env.ts                      ← Environment variable access (lazy getters)
+│   ├── jwt.ts                      ← signToken / verifyToken (jsonwebtoken)
+│   └── password.ts                 ← comparePassword (bcryptjs)
+├── proxy.ts                        ← JWT verification + header injection (Next.js 16 Proxy)
 ├── repository/
-│   └── userRepository.ts           ← SQL queries for user operations
+│   ├── authRepository.ts           ← SQL queries for login (find user, role, dept, permissions)
+│   └── userRepository.ts           ← SQL queries for user registration
 ├── services/
-│   └── userService.ts              ← Business logic for registration
+│   ├── authService.ts              ← Login business logic
+│   └── userService.ts              ← Registration business logic
 ├── store/
 │   └── useAuthStore.ts             ← Zustand auth state + hasPermission()
 scripts/
@@ -389,4 +557,7 @@ next.config.ts                      ← Exposes server env vars for Next.js 16
 | Env variables | `env` | `@/lib/env` |
 | Input validation | Zod v4 schemas | `zod` |
 | Password hashing | `bcrypt.hashSync(password, 10)` | `bcryptjs` |
-| JWT signing | `jwt.sign(payload, secret, options)` | `jsonwebtoken` |
+| Password comparing | `comparePassword(plain, hash)` | `@/lib/password` |
+| JWT signing | `signToken(payload)` | `@/lib/jwt` |
+| JWT verifying | `verifyToken(token)` | `@/lib/jwt` |
+| Read user in routes | `request.headers.get("x-user-id")` | Injected by proxy |

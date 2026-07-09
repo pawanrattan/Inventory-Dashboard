@@ -6,6 +6,58 @@ This document defines the standard patterns for building features in this Next.j
 
 ---
 
+## Authentication & Access Control
+
+### Database Schema
+
+5 tables power the auth system:
+
+```
+roles            → Admin, Manager, User
+departments      → Planning, Purchase, Inventory, Sales, Finance, Administration
+modules          → Planning, Purchase, Inventory, Production, Sales, Finance, Dashboard
+users            → employee_id, name, email, password_hash, role_id, department_id
+module_permissions → department_id + module_id + can_view/create/edit/delete
+```
+
+### Access Control Logic
+
+- **Admin** (role_name = "Admin", department = "Administration"): Full access to all modules. Permission checks are **bypassed** in code.
+- **Manager/User**: Access determined by their `department_id` → lookup `module_permissions` for that department.
+- Permissions are CRUD-level: `can_view`, `can_create`, `can_edit`, `can_delete`.
+- Every user belongs to a department (including Admin → "Administration").
+
+### User Registration Flow (Frontend UI Order)
+
+```
+Step 1: Select Department  → Planning / Purchase / Sales / etc.
+Step 2: Select Role        → Manager / User (if dept = Administration → role = Admin)
+Step 3: Set Permissions    → Module checkboxes (auto-suggest based on department)
+         (If role = Admin → skip this step, full access is granted via code)
+Step 4: Fill Details       → employee_id, name, email, password
+```
+
+### Login Flow
+
+```
+User enters Employee ID + Password (only 2 fields)
+  ↓
+System finds user → checks password → gets role + department + permissions
+  ↓
+Returns JWT with: userId, employeeId, role, department, permissions
+```
+
+### Seeding the First Admin
+
+Since registration requires an existing Admin to be logged in, the first Admin must be seeded via SQL:
+
+```bash
+node scripts/hashPassword.js    # Generates bcrypt hash
+# Then run the printed SQL in MySQL client
+```
+
+---
+
 ## Frontend
 
 ### State Management — Zustand
@@ -18,11 +70,12 @@ All client-side state is managed with Zustand stores located in `src/store/`.
 import { useAuthStore } from "@/store/useAuthStore";
 
 export default function Navbar() {
-  const { user, logout } = useAuthStore();
+  const { user, logout, hasPermission } = useAuthStore();
 
   return (
     <nav>
       <span>{user?.name}</span>
+      {hasPermission("Inventory", "can_edit") && <EditButton />}
       <button onClick={logout}>Logout</button>
     </nav>
   );
@@ -33,354 +86,293 @@ export default function Navbar() {
 - One store per domain (`useAuthStore`, `useInventoryStore`, `useOrderStore`)
 - Always mark components using stores with `"use client"`
 - Access store outside React (interceptors, utilities) via `useAuthStore.getState()`
+- Use `hasPermission(moduleName, action)` for conditional UI rendering
 
 ---
 
 ### API Calls — apiClient
 
-All HTTP requests to external or internal APIs go through the shared Axios instance at `src/lib/apiClient.ts`.
+All HTTP requests go through the shared Axios instance at `src/lib/apiClient.ts`.
 
 ```ts
 import apiClient from "@/lib/apiClient";
 
-// GET
-const { data } = await apiClient.get("/api/products");
-
-// POST
-const { data } = await apiClient.post("/api/products", { name: "Widget", sku: "WDG-001" });
-
-// PUT
-const { data } = await apiClient.put("/api/products/1", { quantity: 50 });
-
-// DELETE
-await apiClient.delete("/api/products/1");
+const { data } = await apiClient.get("/departments");
+const { data } = await apiClient.post("/users/register", payload);
 ```
 
 **Rules:**
 - Never use raw `fetch()` or `axios` directly — always use `apiClient`
 - Token is auto-attached via request interceptor
 - 401 responses auto-trigger logout via response interceptor
-- Base URL is configured from `NEXT_PUBLIC_API_BASE_URL` env var
+- Base URL: `NEXT_PUBLIC_API_BASE_URL` env var
 
 ---
 
 ## Backend
 
+### Architecture Layers
+
+```
+Route Handler (src/app/api/) → Service (src/services/) → Repository (src/repository/)
+```
+
+| Layer | Location | Responsibility |
+|-------|----------|----------------|
+| Route Handler | `src/app/api/` | Parse request, validate input (Zod), call service, return apiResponse |
+| Service | `src/services/` | Business logic, orchestration, transactions, throw errors |
+| Repository | `src/repository/` | Database queries using `query()` or `connection.execute()` only |
+
+**Rules:**
+- SQL only in repository
+- Business logic only in service
+- HTTP concerns only in route handler
+- Never skip a layer (route → service → repository)
+
+---
+
 ### Database Queries — query function
 
-All database access uses the `query` function from `src/lib/db.ts`. Never create your own connections.
-
 ```ts
-import { query, RowDataPacket, ResultSetHeader } from "@/lib/db";
+import { query, pool, RowDataPacket, ResultSetHeader } from "@/lib/db";
 
-// SELECT (returns rows)
-const users = await query<RowDataPacket[]>("SELECT * FROM users WHERE active = ?", [true]);
+// Simple read (uses pool automatically)
+const rows = await query<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
 
-// SELECT single row
-const [user] = await query<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
-
-// INSERT (returns insertId)
-const result = await query<ResultSetHeader>(
-  "INSERT INTO products (name, sku, quantity, price) VALUES (?, ?, ?, ?)",
-  ["Widget", "WDG-001", 100, 9.99]
-);
-console.log(result.insertId);
-
-// UPDATE (returns affectedRows)
-const result = await query<ResultSetHeader>(
-  "UPDATE products SET quantity = ? WHERE id = ?",
-  [50, 1]
-);
-console.log(result.affectedRows);
-
-// DELETE
-await query<ResultSetHeader>("DELETE FROM products WHERE id = ?", [id]);
+// Insert/Update/Delete
+const result = await query<ResultSetHeader>("INSERT INTO ...", [...]);
 ```
 
 **Rules:**
-- Always use `?` parameterized placeholders — never interpolate values into SQL strings
-- Use `RowDataPacket[]` as the generic for SELECT queries
-- Use `ResultSetHeader` as the generic for INSERT/UPDATE/DELETE
-- Database queries only live in the repository layer (`src/repositories/`)
+- Always use `?` parameterized placeholders — never interpolate values
+- Use `RowDataPacket[]` for SELECT, `ResultSetHeader` for INSERT/UPDATE/DELETE
+- For transactions, use `pool.getConnection()` (see Transaction Pattern below)
 
 ---
 
 ### API Responses — apiResponse
 
-All route handlers return responses using the helpers from `src/lib/apiResponse.ts`. Never use raw `NextResponse.json()` directly.
-
 ```ts
 import { successResponse, errorResponse } from "@/lib/apiResponse";
 
-// Success with data
-return successResponse(products, "Products fetched");
-
-// Success with custom status
-return successResponse(newProduct, "Product created", 201);
-
-// Error with message
-return errorResponse("Product not found", 404);
-
-// Error with detail
-return errorResponse("Validation failed", 400, "Name field is required");
+return successResponse(data, "Message", 201);
+return errorResponse("Error message", 400, "Optional detail");
 ```
 
-**Response shape (consistent across all endpoints):**
-
+**Response shape:**
 ```json
-// Success
-{ "success": true, "message": "Products fetched", "data": [...] }
-
-// Error
-{ "success": false, "message": "Product not found", "error": "optional detail" }
+{ "sucess": true, "message": "...", "data": {...} }
+{ "sucess": false, "message": "...", "error": "..." }
 ```
-
-**Rules:**
-- Every route handler must return either `successResponse()` or `errorResponse()`
-- Always wrap route handler logic in try/catch
-- Use appropriate HTTP status codes (200, 201, 400, 401, 404, 500)
 
 ---
 
-## Backend Architecture Layers
+### Environment Variables
 
-```
-Route Handler (src/app/api/) → Service (src/services/) → Repository (src/repositories/)
-```
-
-| Layer | Location | Responsibility |
-|-------|----------|----------------|
-| Route Handler | `src/app/api/` | Parse request, validate input, call service, return apiResponse |
-| Service | `src/services/` | Business logic, orchestration, throw errors |
-| Repository | `src/repositories/` | Database queries using `query()` function only |
-| Models | `src/models/` | TypeScript interfaces shared across layers |
-| Validators | `src/lib/validators/` | Zod schemas for input validation |
-
----
-
-## Environment Variables
-
-All env vars are validated at startup via `src/lib/env.ts`. Import `env` instead of using `process.env` directly.
+Uses lazy getter pattern in `src/lib/env.ts` for Next.js 16 Turbopack compatibility.
+Server-side env vars are explicitly passed via `next.config.ts` `env` property.
 
 ```ts
 import { env } from "@/lib/env";
 
-// Correct
+const host = env.DB_HOST;
 const secret = env.JWT_SECRET;
+```
 
-// Wrong — no type safety, no validation
-const secret = process.env.JWT_SECRET;
+**Required `.env` variables:**
+```
+DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+JWT_SECRET, JWT_EXPIRES_IN
+NEXT_PUBLIC_API_BASE_URL
 ```
 
 ---
 
-## Repository Layer — `src/repositories/`
+### Input Validation — Zod v4
 
-Repositories handle **only** database access. No business logic, no HTTP concerns.
+This project uses **Zod v4** (`zod@^4.4.3`). Key differences from v3:
 
 ```ts
-// src/repositories/productRepository.ts
-import { query, RowDataPacket, ResultSetHeader } from "@/lib/db";
-import { Product, CreateProductInput } from "@/models/product";
+import { z } from "zod";
 
-interface ProductRow extends RowDataPacket {
-  id: number;
-  name: string;
-  sku: string;
-  quantity: number;
-  price: number;
-  created_at: Date;
-  updated_at: Date;
+// Email (v4 — standalone, not z.string().email())
+email: z.email("Invalid email format")
+
+// Error access (v4 — .issues, not .errors)
+if (!parsed.success) {
+  const firstIssue = parsed.error.issues[0];
 }
-
-class ProductRepository {
-  async findAll(): Promise<Product[]> {
-    return query<ProductRow[]>("SELECT * FROM products");
-  }
-
-  async findById(id: number): Promise<Product | null> {
-    const rows = await query<ProductRow[]>("SELECT * FROM products WHERE id = ?", [id]);
-    return rows[0] || null;
-  }
-
-  async findBySku(sku: string): Promise<Product | null> {
-    const rows = await query<ProductRow[]>("SELECT * FROM products WHERE sku = ?", [sku]);
-    return rows[0] || null;
-  }
-
-  async create(data: CreateProductInput): Promise<ResultSetHeader> {
-    return query<ResultSetHeader>(
-      "INSERT INTO products (name, sku, quantity, price) VALUES (?, ?, ?, ?)",
-      [data.name, data.sku, data.quantity, data.price]
-    );
-  }
-
-  async update(id: number, data: Partial<CreateProductInput>): Promise<ResultSetHeader> {
-    const fields: string[] = [];
-    const values: (string | number)[] = [];
-
-    Object.entries(data).forEach(([key, value]) => {
-      if (value !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(value);
-      }
-    });
-
-    values.push(id);
-    return query<ResultSetHeader>(`UPDATE products SET ${fields.join(", ")} WHERE id = ?`, values);
-  }
-
-  async delete(id: number): Promise<ResultSetHeader> {
-    return query<ResultSetHeader>("DELETE FROM products WHERE id = ?", [id]);
-  }
-}
-
-export const productRepository = new ProductRepository();
 ```
-
-**Rules:**
-- One repository per database table/entity
-- Only use the `query()` function from `@/lib/db`
-- Return raw data — no formatting, no HTTP responses
-- Keep methods focused: one query per method
-- Never import services or route handlers
 
 ---
 
-## Service Layer — `src/services/`
+## Transaction Pattern
 
-Services contain **business logic**. They orchestrate repositories, enforce rules, and throw meaningful errors.
+When multiple inserts need to succeed or fail together:
 
 ```ts
-// src/services/productService.ts
-import { productRepository } from "@/repositories/productRepository";
-import { CreateProductInput, Product } from "@/models/product";
+import { pool } from "@/lib/db";
 
-class ProductService {
-  async getAll(): Promise<Product[]> {
-    return productRepository.findAll();
-  }
-
-  async getById(id: number): Promise<Product> {
-    const product = await productRepository.findById(id);
-    if (!product) {
-      throw new Error("Product not found");
-    }
-    return product;
-  }
-
-  async create(data: CreateProductInput): Promise<number> {
-    // Business rule: SKU must be unique
-    const existing = await productRepository.findBySku(data.sku);
-    if (existing) {
-      throw new Error("A product with this SKU already exists");
-    }
-
-    // Business rule: quantity cannot be negative
-    if (data.quantity < 0) {
-      throw new Error("Quantity cannot be negative");
-    }
-
-    const result = await productRepository.create(data);
-    return result.insertId;
-  }
-
-  async update(id: number, data: Partial<CreateProductInput>): Promise<void> {
-    // Ensure product exists
-    await this.getById(id);
-
-    // Business rule: if updating SKU, check it's not taken
-    if (data.sku) {
-      const existing = await productRepository.findBySku(data.sku);
-      if (existing && existing.id !== id) {
-        throw new Error("SKU already in use by another product");
-      }
-    }
-
-    await productRepository.update(id, data);
-  }
-
-  async delete(id: number): Promise<void> {
-    await this.getById(id); // ensure exists
-    await productRepository.delete(id);
-  }
+const connection = await pool.getConnection();
+try {
+  await connection.beginTransaction();
+  await connection.execute("INSERT INTO ...", [...]);
+  await connection.execute("INSERT INTO ...", [...]);
+  await connection.commit();
+} catch (error) {
+  await connection.rollback();
+  throw error;
+} finally {
+  connection.release();
 }
-
-export const productService = new ProductService();
 ```
-
-**Rules:**
-- One service per domain (not per table — a service can use multiple repositories)
-- All business rules and validations live here
-- Throw errors with descriptive messages — the route handler catches them
-- Never import `NextResponse`, `NextRequest`, or anything HTTP-related
-- Never call `query()` directly — always go through a repository
 
 ---
 
-## Route Handler — Putting It All Together
+## Implemented APIs
 
-```ts
-// src/app/api/products/route.ts
-import { NextRequest } from "next/server";
-import { successResponse, errorResponse } from "@/lib/apiResponse";
-import { productService } from "@/services/productService";
-import { createProductSchema } from "@/lib/validators/productSchema";
+### POST /api/users/register
 
-export async function GET() {
-  try {
-    const products = await productService.getAll();
-    return successResponse(products, "Products fetched");
-  } catch (error: any) {
-    return errorResponse(error.message || "Failed to fetch products", 500);
-  }
+**Purpose:** Register a new user with role, department, and module permissions.
+
+**Authentication:** Will be Admin-only (after login API is built). Currently open for testing.
+
+**Request Body:**
+```json
+{
+  "employee_id": "EMP002",
+  "name": "Rahul Pawa",
+  "email": "rahul@rattanindia.com",
+  "password": "Rahul@2026",
+  "role_id": 2,
+  "department_id": 5,
+  "permissions": [
+    {
+      "module_name": "Sales",
+      "can_view": true,
+      "can_create": true,
+      "can_edit": true,
+      "can_delete": true
+    },
+    {
+      "module_name": "Dashboard",
+      "can_view": true,
+      "can_create": false,
+      "can_edit": false,
+      "can_delete": false
+    }
+  ]
 }
+```
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-
-    // Validate input with Zod
-    const parsed = createProductSchema.safeParse(body);
-    if (!parsed.success) {
-      return errorResponse("Validation failed", 400, parsed.error.message);
-    }
-
-    // Call service — business logic happens there
-    const insertId = await productService.create(parsed.data);
-    return successResponse({ id: insertId }, "Product created", 201);
-  } catch (error: any) {
-    // Service threw a business error (e.g., "SKU already exists")
-    if (error.message.includes("already exists")) {
-      return errorResponse(error.message, 409);
-    }
-    return errorResponse(error.message || "Failed to create product", 500);
+**Success Response (201):**
+```json
+{
+  "sucess": true,
+  "message": "User registered successfully",
+  "data": {
+    "id": 2,
+    "employee_id": "EMP002",
+    "name": "Rahul Pawa",
+    "email": "rahul@rattanindia.com",
+    "role_name": "Manager",
+    "department_name": "Sales",
+    "is_active": true,
+    "created_at": "2026-07-09T..."
   }
 }
 ```
 
-**Rules:**
-- Route handlers are thin controllers — they only handle HTTP concerns
-- Parse and validate input → call service → return apiResponse
-- Never write SQL or business logic in route handlers
-- Always wrap in try/catch and return appropriate error responses
+**Error Responses:**
+| Status | When |
+|--------|------|
+| 400 | Validation failed, module not found, invalid role/dept |
+| 409 | Employee ID or email already exists |
+| 500 | Unexpected server error |
+
+**Internal Flow:**
+```
+Route (Zod validate) → Service → Repository → MySQL
+                         │
+                         ├── Check employee_id unique
+                         ├── Check email unique
+                         ├── Verify role_id exists in roles table
+                         ├── Verify department_id exists in departments table
+                         ├── Resolve module_name → module_id from modules table
+                         ├── Hash password (bcrypt, 10 rounds)
+                         ├── BEGIN TRANSACTION
+                         │     ├── INSERT INTO users
+                         │     └── INSERT IGNORE INTO module_permissions
+                         ├── COMMIT
+                         └── Return user (no password_hash)
+```
 
 ---
 
-## Data Flow Summary
+## Database Tables
+
+### Schema
+
+```sql
+roles (id, role_name, description, created_at)
+departments (id, department_name, description, created_at)
+modules (id, module_name, description, created_at)
+users (id, employee_id, name, email, password_hash, role_id, department_id, is_active, last_login, created_at, updated_at)
+module_permissions (id, department_id, module_id, can_view, can_create, can_edit, can_delete, created_at)
+```
+
+### Relationships
 
 ```
-Frontend Component
-  → useAuthStore / useInventoryStore (state)
-  → apiClient.get/post/put/delete (HTTP call)
-    → Route Handler (parse request, validate)
-      → Service (business logic, rules)
-        → Repository (SQL query via query())
-          → MySQL Database
-        ← raw data
-      ← processed data or thrown error
-    ← successResponse / errorResponse
-  ← response.data.data / response.data.message
+users.role_id        → roles.id
+users.department_id  → departments.id
+module_permissions.department_id → departments.id
+module_permissions.module_id    → modules.id
+UNIQUE(department_id, module_id) on module_permissions
+```
+
+### Seed Data
+
+```
+Roles: Admin, Manager, User
+Departments: Planning, Purchase, Inventory, Production, Sales, Finance, Administration
+Modules: Planning, Purchase, Inventory, Production, Sales, Finance, Dashboard
+```
+
+### Key Design Decisions
+
+- Permissions are **department-level** (not user-level). All users in a department share permissions.
+- `INSERT IGNORE` prevents conflicts when registering multiple users in the same department.
+- Admin gets full access via **role check in code** — not via module_permissions rows.
+- Every user has a department (Admin → "Administration").
+- `modules` table exists separately from `departments` to avoid typos and enable renaming.
+
+---
+
+## File Structure
+
+```
+src/
+├── app/
+│   └── api/
+│       └── users/
+│           └── register/
+│               └── route.ts        ← API route handler
+├── lib/
+│   ├── apiClient.ts                ← Axios instance (frontend)
+│   ├── apiResponse.ts              ← successResponse / errorResponse helpers
+│   ├── db.ts                       ← MySQL pool + query() helper
+│   └── env.ts                      ← Environment variable access (lazy getters)
+├── repository/
+│   └── userRepository.ts           ← SQL queries for user operations
+├── services/
+│   └── userService.ts              ← Business logic for registration
+├── store/
+│   └── useAuthStore.ts             ← Zustand auth state + hasPermission()
+scripts/
+└── hashPassword.js                 ← One-time bcrypt hash generator for seeding
+.env                                ← Environment variables (not committed)
+next.config.ts                      ← Exposes server env vars for Next.js 16
 ```
 
 ---
@@ -392,6 +384,9 @@ Frontend Component
 | Frontend state | Zustand store | `@/store/useXxxStore` |
 | Frontend API calls | `apiClient` | `@/lib/apiClient` |
 | Database queries | `query()` | `@/lib/db` |
+| Transactions | `pool.getConnection()` | `@/lib/db` |
 | API responses | `successResponse` / `errorResponse` | `@/lib/apiResponse` |
 | Env variables | `env` | `@/lib/env` |
-| Input validation | Zod schemas | `@/lib/validators/xxxSchema` |
+| Input validation | Zod v4 schemas | `zod` |
+| Password hashing | `bcrypt.hashSync(password, 10)` | `bcryptjs` |
+| JWT signing | `jwt.sign(payload, secret, options)` | `jsonwebtoken` |

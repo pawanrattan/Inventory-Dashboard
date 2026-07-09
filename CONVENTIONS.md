@@ -291,7 +291,7 @@ const departmentId = Number(request.headers.get("x-department-id"));
 ### Rules
 - **Never** verify JWT manually in route handlers — proxy already did it
 - Public routes must be added to `PUBLIC_ROUTES` array in `proxy.ts`
-- Token is stored in an HTTP-only cookie (not localStorage) for security
+- Token is sent via `Authorization: Bearer <token>` header (not cookies)
 - The `config.matcher` restricts proxy to `/api/:path*` only
 
 ---
@@ -540,6 +540,7 @@ src/
 scripts/
 └── hashPassword.js                 ← One-time bcrypt hash generator for seeding
 .env                                ← Environment variables (not committed)
+genesis-DESIGN.md                   ← UI design system (colors, typography, spacing, components)
 next.config.ts                      ← Exposes server env vars for Next.js 16
 ```
 

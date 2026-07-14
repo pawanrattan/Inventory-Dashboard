@@ -2,7 +2,8 @@
  * GET /api/production-plan?month=2026-07
  * =======================================
  * Returns the daily production plan for a given month.
- * Also returns available bike models and colors for reference.
+ * Data comes from `monthly_production_plan` table in `inventory_dashboard` DB.
+ * Each row has a JSON `data` column: { "1": qty, "2": qty, ... "31": qty }
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,15 +14,14 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month") || getCurrentMonth();
 
-    const [plans, models, colors] = await Promise.all([
+    const [plans, models] = await Promise.all([
       productionPlanService.getByMonth(month),
       productionPlanService.getBikeModels(),
-      productionPlanService.getBikeColors(),
     ]);
 
     return NextResponse.json({
       success: true,
-      data: { month, plans, models, colors },
+      data: { month, plans, models },
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal Server Error";

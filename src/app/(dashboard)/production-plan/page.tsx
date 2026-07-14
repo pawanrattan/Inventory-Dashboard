@@ -6,25 +6,21 @@ import apiClient from "@/lib/apiClient";
 
 interface PlanRow {
   id: number;
-  month: string;
+  bike_model_id: number;
   bike_model: string;
-  bike_color: string;
-  [key: string]: string | number;
+  month: string;
+  data: Record<string, number>; // { "1": qty, "2": qty, ... }
 }
 
 interface BikeModel { id: number; model_name: string; }
-interface BikeColor { id: number; color_name: string; }
 
 function fmtN(n: number | null | undefined) {
   return (n || 0).toLocaleString("en-IN");
 }
 
-const DAY_KEYS = Array.from({ length: 31 }, (_, i) => `day_${String(i + 1).padStart(2, "0")}`);
-
 export default function ProductionPlanPage() {
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const [models, setModels] = useState<BikeModel[]>([]);
-  const [colors, setColors] = useState<BikeColor[]>([]);
   const [month, setMonth] = useState(getCurrentMonth());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +37,6 @@ export default function ProductionPlanPage() {
       if (res.data?.success) {
         setPlans(res.data.data.plans || []);
         setModels(res.data.data.models || []);
-        setColors(res.data.data.colors || []);
       } else setError("Failed to load production plan.");
     } catch { setError("Failed to load data."); }
     finally { setIsLoading(false); }
@@ -55,33 +50,42 @@ export default function ProductionPlanPage() {
     return new Date(y, m, 0).getDate();
   }, [month]);
 
-  const activeDayKeys = useMemo(() => DAY_KEYS.slice(0, daysInMonth), [daysInMonth]);
+  // Day keys as strings: "1", "2", ..., "31"
+  const activeDayKeys = useMemo(() =>
+    Array.from({ length: daysInMonth }, (_, i) => String(i + 1)),
+    [daysInMonth]
+  );
+
+  // Helper to get quantity for a day from a plan row
+  const getDayQty = (row: PlanRow, day: string): number => {
+    return Number(row.data?.[day]) || 0;
+  };
 
   // Summary
   const summary = useMemo(() => {
     const totalUnits = plans.reduce((acc, row) => {
-      return acc + activeDayKeys.reduce((s, k) => s + (Number(row[k]) || 0), 0);
+      return acc + activeDayKeys.reduce((s, k) => s + getDayQty(row, k), 0);
     }, 0);
 
     const uniqueModels = new Set(plans.map((r) => r.bike_model)).size;
-    const uniqueColors = new Set(plans.map((r) => r.bike_color)).size;
 
     // Daily totals
     const dailyTotals = activeDayKeys.map((k) =>
-      plans.reduce((s, row) => s + (Number(row[k]) || 0), 0)
+      plans.reduce((s, row) => s + getDayQty(row, k), 0)
     );
     const peakDay = Math.max(...dailyTotals, 0);
     const peakDayIndex = dailyTotals.indexOf(peakDay);
-    const avgDaily = totalUnits > 0 ? Math.round(totalUnits / dailyTotals.filter((d) => d > 0).length) : 0;
+    const workingDays = dailyTotals.filter((d) => d > 0).length;
+    const avgDaily = workingDays > 0 ? Math.round(totalUnits / workingDays) : 0;
 
     // Per model totals
     const modelTotals = new Map<string, number>();
     plans.forEach((row) => {
-      const total = activeDayKeys.reduce((s, k) => s + (Number(row[k]) || 0), 0);
+      const total = activeDayKeys.reduce((s, k) => s + getDayQty(row, k), 0);
       modelTotals.set(row.bike_model, (modelTotals.get(row.bike_model) || 0) + total);
     });
 
-    return { totalUnits, uniqueModels, uniqueColors, dailyTotals, peakDay, peakDayIndex, avgDaily, modelTotals };
+    return { totalUnits, uniqueModels, dailyTotals, peakDay, peakDayIndex, avgDaily, modelTotals };
   }, [plans, activeDayKeys]);
 
   // Filtered
@@ -104,7 +108,7 @@ export default function ProductionPlanPage() {
       chartInstances.current["daily"] = new Chart(dailyChartRef.current, {
         type: "line",
         data: {
-          labels: activeDayKeys.map((_, i) => String(i + 1)),
+          labels: activeDayKeys,
           datasets: [{
             label: "Daily Production",
             data: summary.dailyTotals,
@@ -184,7 +188,7 @@ export default function ProductionPlanPage() {
       <div className="page-header">
         <div>
           <h1>Production Plan</h1>
-          <p className="page-subtitle">{monthLabel} · Daily Bike-wise Color-wise Breakdown</p>
+          <p className="page-subtitle">{monthLabel} · Daily Bike-wise Breakdown</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <input
@@ -201,10 +205,10 @@ export default function ProductionPlanPage() {
       {/* KPIs */}
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)", marginBottom: 28 }}>
         <KpiCard label="Total Planned" value={fmtN(summary.totalUnits)} sub={`${monthLabel}`} accent="var(--accent)" />
-        <KpiCard label="Active Models" value={String(summary.uniqueModels)} sub={`${summary.uniqueColors} color variants`} accent="var(--success)" />
+        <KpiCard label="Active Models" value={String(summary.uniqueModels)} sub="Bike models" accent="var(--success)" />
         <KpiCard label="Peak Day" value={fmtN(summary.peakDay)} sub={`Day ${summary.peakDayIndex + 1}`} accent="var(--warning)" />
         <KpiCard label="Avg Daily" value={fmtN(summary.avgDaily)} sub="Working days only" accent="var(--info)" />
-        <KpiCard label="Plan Entries" value={String(plans.length)} sub="Model × Color rows" accent="var(--purple)" />
+        <KpiCard label="Plan Entries" value={String(plans.length)} sub="Model rows" accent="var(--purple)" />
       </div>
 
       {/* Charts */}
@@ -238,27 +242,25 @@ export default function ProductionPlanPage() {
           <table className="data-table" style={{ minWidth: 1200 }}>
             <thead>
               <tr>
-                <th style={{ position: "sticky", left: 0, zIndex: 10, background: "var(--surface-alt)", minWidth: 90 }}>Model</th>
-                <th style={{ position: "sticky", left: 90, zIndex: 10, background: "var(--surface-alt)", minWidth: 160, borderRight: "2px solid var(--border)" }}>Color</th>
-                {activeDayKeys.map((_, i) => (
-                  <th key={i} style={{ textAlign: "center", minWidth: 38 }}>{i + 1}</th>
+                <th style={{ position: "sticky", left: 0, zIndex: 10, background: "var(--surface-alt)", minWidth: 160, borderRight: "2px solid var(--border)" }}>Model</th>
+                {activeDayKeys.map((day) => (
+                  <th key={day} style={{ textAlign: "center", minWidth: 38 }}>{day}</th>
                 ))}
                 <th style={{ position: "sticky", right: 0, zIndex: 10, background: "var(--surface-alt)", textAlign: "right", fontWeight: 700, minWidth: 70, borderLeft: "2px solid var(--border)" }}>Total</th>
               </tr>
             </thead>
             <tbody>
               {filteredPlans.length === 0 ? (
-                <tr><td colSpan={daysInMonth + 3} style={{ textAlign: "center", padding: 50, color: "var(--text-muted)" }}>No production plan data for this month.</td></tr>
+                <tr><td colSpan={daysInMonth + 2} style={{ textAlign: "center", padding: 50, color: "var(--text-muted)" }}>No production plan data for this month.</td></tr>
               ) : filteredPlans.map((row) => {
-                const rowTotal = activeDayKeys.reduce((s, k) => s + (Number(row[k]) || 0), 0);
+                const rowTotal = activeDayKeys.reduce((s, k) => s + getDayQty(row, k), 0);
                 return (
                   <tr key={row.id} style={{ borderLeft: `3px solid ${rowTotal > 0 ? "var(--accent)" : "var(--border)"}` }}>
-                    <td style={{ position: "sticky", left: 0, zIndex: 5, background: "var(--surface)", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap", minWidth: 90 }}>{row.bike_model}</td>
-                    <td style={{ position: "sticky", left: 90, zIndex: 5, background: "var(--surface)", fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap", minWidth: 160, borderRight: "2px solid var(--border-light)" }}>{row.bike_color}</td>
-                    {activeDayKeys.map((k, i) => {
-                      const val = Number(row[k]) || 0;
+                    <td style={{ position: "sticky", left: 0, zIndex: 5, background: "var(--surface)", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap", minWidth: 160, borderRight: "2px solid var(--border-light)" }}>{row.bike_model}</td>
+                    {activeDayKeys.map((day) => {
+                      const val = getDayQty(row, day);
                       return (
-                        <td key={i} className="num" style={{ textAlign: "center", fontSize: 11, color: val > 0 ? "var(--charcoal)" : "var(--concrete)", fontWeight: val > 0 ? 500 : 400, background: val === 0 ? "rgba(156,163,175,0.04)" : undefined }}>
+                        <td key={day} className="num" style={{ textAlign: "center", fontSize: 11, color: val > 0 ? "var(--charcoal)" : "var(--concrete)", fontWeight: val > 0 ? 500 : 400, background: val === 0 ? "rgba(156,163,175,0.04)" : undefined }}>
                           {val > 0 ? val : "·"}
                         </td>
                       );
@@ -269,7 +271,7 @@ export default function ProductionPlanPage() {
               })}
               {/* Totals row */}
               <tr style={{ background: "var(--surface-alt)", borderTop: "2px solid var(--charcoal)" }}>
-                <td colSpan={2} style={{ fontWeight: 700, position: "sticky", left: 0, zIndex: 5, background: "var(--surface-alt)", borderRight: "2px solid var(--border)" }}>TOTAL</td>
+                <td style={{ fontWeight: 700, position: "sticky", left: 0, zIndex: 5, background: "var(--surface-alt)", borderRight: "2px solid var(--border)" }}>TOTAL</td>
                 {activeDayKeys.map((_, i) => (
                   <td key={i} className="num" style={{ textAlign: "center", fontWeight: 700, fontSize: 11, color: "var(--accent)" }}>
                     {summary.dailyTotals[i] > 0 ? summary.dailyTotals[i] : "·"}

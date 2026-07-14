@@ -72,26 +72,6 @@ ORDER BY [Part No], [Part Description];';
 EXEC sp_executesql @SQL;
 `;
 
-// ─── Production Plan – Bike-wise Monthly Breakdown (MySQL) ───────────────────
-
-export const PRODUCTION_PLAN_MONTHLY = `
-SELECT
-    b.bike_name,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=4 THEN p.planned_quantity ELSE 0 END) AS \`Apr-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=5 THEN p.planned_quantity ELSE 0 END) AS \`May-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=6 THEN p.planned_quantity ELSE 0 END) AS \`Jun-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=7 THEN p.planned_quantity ELSE 0 END) AS \`Jul-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=8 THEN p.planned_quantity ELSE 0 END) AS \`Aug-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=9 THEN p.planned_quantity ELSE 0 END) AS \`Sep-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=10 THEN p.planned_quantity ELSE 0 END) AS \`Oct-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=11 THEN p.planned_quantity ELSE 0 END) AS \`Nov-26\`,
-    SUM(CASE WHEN p.plan_year=2026 AND p.plan_month=12 THEN p.planned_quantity ELSE 0 END) AS \`Dec-26\`,
-    SUM(CASE WHEN p.plan_year=2027 AND p.plan_month=1 THEN p.planned_quantity ELSE 0 END) AS \`Jan-27\`,
-    SUM(CASE WHEN p.plan_year=2027 AND p.plan_month=2 THEN p.planned_quantity ELSE 0 END) AS \`Feb-27\`,
-    SUM(CASE WHEN p.plan_year=2027 AND p.plan_month=3 THEN p.planned_quantity ELSE 0 END) AS \`Mar-27\`,
-    SUM(p.planned_quantity) AS Total
-FROM bike b
-LEFT JOIN production_plan p ON b.bike_id = p.bike_id
-GROUP BY b.bike_id, b.bike_name
-ORDER BY b.bike_id;
-`;
+// ─── Production Plan – Daily Breakdown (MySQL / inventory_dashboard) ─────────
+// Now handled by productionPlanRepository.ts using the monthly_production_plan
+// table with JSON `data` column. The old query is no longer needed.

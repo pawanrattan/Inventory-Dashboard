@@ -1,5 +1,5 @@
 import { productionPlanRepository } from "@/repository/productionPlanRepository";
-import { CreateProductionPlanInput, ProductionPlanRow, BikeModel, BikeColor } from "@/models/productionPlan";
+import { CreateProductionPlanInput, ProductionPlanRow, BikeModel } from "@/models/productionPlan";
 
 class ProductionPlanService {
   async getByMonth(month: string): Promise<ProductionPlanRow[]> {
@@ -13,23 +13,22 @@ class ProductionPlanService {
   }
 
   async create(data: CreateProductionPlanInput): Promise<number> {
-    // Business rule: no duplicate for same model + color + month
+    // Business rule: no duplicate for same model + month
     const existing = await productionPlanRepository.findExisting(
       data.month,
-      data.bike_model_id,
-      data.bike_color_id
+      data.bike_model_id
     );
     if (existing) {
-      throw new Error("Production plan already exists for this model/color/month");
+      throw new Error("Production plan already exists for this model/month");
     }
 
     const result = await productionPlanRepository.create(data);
     return result.insertId;
   }
 
-  async update(id: number, days: number[]): Promise<void> {
+  async update(id: number, data: Record<string, number>): Promise<void> {
     await this.getById(id); // throws if not found
-    await productionPlanRepository.update(id, days);
+    await productionPlanRepository.update(id, data);
   }
 
   async delete(id: number): Promise<void> {
@@ -39,10 +38,6 @@ class ProductionPlanService {
 
   async getBikeModels(): Promise<BikeModel[]> {
     return productionPlanRepository.getAllBikeModels();
-  }
-
-  async getBikeColors(): Promise<BikeColor[]> {
-    return productionPlanRepository.getAllBikeColors();
   }
 }
 

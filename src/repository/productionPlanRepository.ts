@@ -1,84 +1,105 @@
 import { query, RowDataPacket, ResultSetHeader } from "@/lib/db";
-import { ProductionPlanRow, BikeModel, BikeColor, CreateProductionPlanInput } from "@/models/productionPlan";
+import { ProductionPlanRow, BikeModel, CreateProductionPlanInput } from "@/models/productionPlan";
+
+interface RawPlanRow extends RowDataPacket {
+  id: number;
+  bike_model_id: number;
+  month: string;
+  data: string; // JSON string from MySQL
+  model_name: string;
+}
 
 class ProductionPlanRepository {
+  /**
+   * Find all production plans for a given month.
+   * Month param comes as 'YYYY-MM', query matches against 'YYYY-MM-01' stored in the table.
+   */
   async findByMonth(month: string): Promise<ProductionPlanRow[]> {
-    return query<ProductionPlanRow[]>(
+    const monthDate = `${month}-01`; // convert 'YYYY-MM' to 'YYYY-MM-01'
+    const rows = await query<RawPlanRow[]>(
       `SELECT 
-        mpp.id, mpp.month,
-        bm.model_name AS bike_model,
-        bc.color_name AS bike_color,
-        mpp.bike_model_id, mpp.bike_color_id,
-        mpp.day_01, mpp.day_02, mpp.day_03, mpp.day_04, mpp.day_05,
-        mpp.day_06, mpp.day_07, mpp.day_08, mpp.day_09, mpp.day_10,
-        mpp.day_11, mpp.day_12, mpp.day_13, mpp.day_14, mpp.day_15,
-        mpp.day_16, mpp.day_17, mpp.day_18, mpp.day_19, mpp.day_20,
-        mpp.day_21, mpp.day_22, mpp.day_23, mpp.day_24, mpp.day_25,
-        mpp.day_26, mpp.day_27, mpp.day_28, mpp.day_29, mpp.day_30, mpp.day_31
+        mpp.id,
+        mpp.bike_model_id,
+        mpp.month,
+        mpp.data,
+        b.bike_name AS model_name
       FROM monthly_production_plan mpp
-      JOIN bike_models bm ON mpp.bike_model_id = bm.id
-      JOIN bike_colors bc ON mpp.bike_color_id = bc.id
+      JOIN bike b ON mpp.bike_model_id = b.id
       WHERE mpp.month = ?
-      ORDER BY bm.model_name, bc.color_name`,
-      [month]
+      ORDER BY b.bike_name`,
+      [monthDate]
     );
+
+    return rows.map((row) => ({
+      id: row.id,
+      bike_model_id: row.bike_model_id,
+      bike_model: row.model_name,
+      month: row.month,
+      data: typeof row.data === "string" ? JSON.parse(row.data) : row.data,
+    }));
   }
 
   async findById(id: number): Promise<ProductionPlanRow | null> {
-    const rows = await query<ProductionPlanRow[]>(
+    const rows = await query<RawPlanRow[]>(
       `SELECT 
-        mpp.id, mpp.month,
-        bm.model_name AS bike_model,
-        bc.color_name AS bike_color,
-        mpp.bike_model_id, mpp.bike_color_id,
-        mpp.day_01, mpp.day_02, mpp.day_03, mpp.day_04, mpp.day_05,
-        mpp.day_06, mpp.day_07, mpp.day_08, mpp.day_09, mpp.day_10,
-        mpp.day_11, mpp.day_12, mpp.day_13, mpp.day_14, mpp.day_15,
-        mpp.day_16, mpp.day_17, mpp.day_18, mpp.day_19, mpp.day_20,
-        mpp.day_21, mpp.day_22, mpp.day_23, mpp.day_24, mpp.day_25,
-        mpp.day_26, mpp.day_27, mpp.day_28, mpp.day_29, mpp.day_30, mpp.day_31
+        mpp.id,
+        mpp.bike_model_id,
+        mpp.month,
+        mpp.data,
+        b.bike_name AS model_name
       FROM monthly_production_plan mpp
-      JOIN bike_models bm ON mpp.bike_model_id = bm.id
-      JOIN bike_colors bc ON mpp.bike_color_id = bc.id
+      JOIN bike b ON mpp.bike_model_id = b.id
       WHERE mpp.id = ?`,
       [id]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    const row = rows[0];
+    return {
+      id: row.id,
+      bike_model_id: row.bike_model_id,
+      bike_model: row.model_name,
+      month: row.month,
+      data: typeof row.data === "string" ? JSON.parse(row.data) : row.data,
+    };
   }
 
-  async findExisting(month: string, bikeModelId: number, bikeColorId: number): Promise<ProductionPlanRow | null> {
-    const rows = await query<ProductionPlanRow[]>(
-      `SELECT * FROM monthly_production_plan 
-       WHERE month = ? AND bike_model_id = ? AND bike_color_id = ?`,
-      [month, bikeModelId, bikeColorId]
+  async findExisting(month: string, bikeModelId: number): Promise<ProductionPlanRow | null> {
+    const monthDate = `${month}-01`;
+    const rows = await query<RawPlanRow[]>(
+      `SELECT 
+        mpp.id,
+        mpp.bike_model_id,
+        mpp.month,
+        mpp.data,
+        b.bike_name AS model_name
+      FROM monthly_production_plan mpp
+      JOIN bike b ON mpp.bike_model_id = b.id
+      WHERE mpp.month = ? AND mpp.bike_model_id = ?`,
+      [monthDate, bikeModelId]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    const row = rows[0];
+    return {
+      id: row.id,
+      bike_model_id: row.bike_model_id,
+      bike_model: row.model_name,
+      month: row.month,
+      data: typeof row.data === "string" ? JSON.parse(row.data) : row.data,
+    };
   }
 
-  async create(data: CreateProductionPlanInput): Promise<ResultSetHeader> {
+  async create(input: CreateProductionPlanInput): Promise<ResultSetHeader> {
     return query<ResultSetHeader>(
-      `INSERT INTO monthly_production_plan 
-        (month, bike_model_id, bike_color_id,
-         day_01, day_02, day_03, day_04, day_05, day_06, day_07,
-         day_08, day_09, day_10, day_11, day_12, day_13, day_14,
-         day_15, day_16, day_17, day_18, day_19, day_20, day_21,
-         day_22, day_23, day_24, day_25, day_26, day_27, day_28,
-         day_29, day_30, day_31)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [data.month, data.bike_model_id, data.bike_color_id, ...data.days]
+      `INSERT INTO monthly_production_plan (bike_model_id, month, data)
+       VALUES (?, ?, ?)`,
+      [input.bike_model_id, input.month, JSON.stringify(input.data)]
     );
   }
 
-  async update(id: number, days: number[]): Promise<ResultSetHeader> {
+  async update(id: number, data: Record<string, number>): Promise<ResultSetHeader> {
     return query<ResultSetHeader>(
-      `UPDATE monthly_production_plan SET
-        day_01=?, day_02=?, day_03=?, day_04=?, day_05=?, day_06=?, day_07=?,
-        day_08=?, day_09=?, day_10=?, day_11=?, day_12=?, day_13=?, day_14=?,
-        day_15=?, day_16=?, day_17=?, day_18=?, day_19=?, day_20=?, day_21=?,
-        day_22=?, day_23=?, day_24=?, day_25=?, day_26=?, day_27=?, day_28=?,
-        day_29=?, day_30=?, day_31=?
-       WHERE id = ?`,
-      [...days, id]
+      `UPDATE monthly_production_plan SET data = ? WHERE id = ?`,
+      [JSON.stringify(data), id]
     );
   }
 
@@ -87,11 +108,7 @@ class ProductionPlanRepository {
   }
 
   async getAllBikeModels(): Promise<BikeModel[]> {
-    return query<BikeModel[]>("SELECT id, model_name FROM bike_models ORDER BY model_name");
-  }
-
-  async getAllBikeColors(): Promise<BikeColor[]> {
-    return query<BikeColor[]>("SELECT id, color_name FROM bike_colors ORDER BY color_name");
+    return query<BikeModel[]>("SELECT id, bike_name AS model_name FROM bike ORDER BY bike_name");
   }
 }
 

@@ -13,6 +13,7 @@ import {
   fetchFullBomAllBikes,
   fetchPartDetails,
   fetchBikes,
+  fetchWareHouseInventory,
 } from "@/repository/inventoryRepository";
 import { logger } from "@/lib/logger";
 
@@ -122,10 +123,11 @@ export async function getBomStockWithProductionPlan() {
 // ─── Full BOM with Part Details (MSSQL + MySQL) ─────────────────────────────
 
 export async function getFullBomWithPartDetails() {
-  const [bomData, partDetails, bikes] = await Promise.all([
+  const [bomData, partDetails, bikes,warehouseInventory] = await Promise.all([
     fetchFullBomAllBikes(),
     fetchPartDetails(),
     fetchBikes(),
+    fetchWareHouseInventory()
   ]);
 
   // Build lookup map from MySQL part details keyed by part_no
@@ -133,6 +135,12 @@ export async function getFullBomWithPartDetails() {
     string,
     { nature: string; category: string; supplier: string; part_description: string; inventory_level: number; moq: number }
   >();
+
+  const warehouseInventoryMap= new Map<string, {quantity:string}>();
+  
+  for(const item of warehouseInventory){
+    warehouseInventoryMap.set(item.ItemCode as string,{quantity:item["Warehouse Qty"] as string})
+  }
   for (const part of partDetails) {
     partMap.set(part.part_no, {
       nature: part.nature,
@@ -181,6 +189,7 @@ export async function getFullBomWithPartDetails() {
   // Build final part-wise response
   const result = Array.from(partBomMap.entries()).map(([partNo, bomInfo]) => {
     const partInfo = partMap.get(partNo);
+    const  warehouseQuantity= warehouseInventoryMap.get(partNo)?.quantity ?? '0'
     return {
       part_no: partNo,
       part_description: partInfo?.part_description ?? bomInfo.description,
@@ -189,6 +198,7 @@ export async function getFullBomWithPartDetails() {
       supplier: partInfo?.supplier ?? null,
       inventory_level: partInfo?.inventory_level ?? null,
       moq: partInfo?.moq ?? null,
+      quantity:warehouseQuantity,
       bikes: bomInfo.bikes,
     };
   });

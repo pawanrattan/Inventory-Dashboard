@@ -4,7 +4,7 @@
  * Database queries for Current Inventory and Monthly Procurement modules.
  */
 
-import { getMssqlPool } from "@/lib/mssqlDb";
+import { executeMssqlQuery, getMssqlPool } from "@/lib/mssqlDb";
 import { pool, RowDataPacket } from "@/lib/db";
 import { env } from "@/lib/env";
 import { WAREHOUSE_WISE_INVENTORY, BOM_PIVOT_RV_BIKES, FULL_BOM_ALL_BIKES } from "@/lib/queries";
@@ -81,6 +81,11 @@ export async function fetchFullBomAllBikes() {
   const mssqlPool = await getMssqlPool();
   const result = await mssqlPool.request().query(FULL_BOM_ALL_BIKES);
   return result.recordset;
+}
+
+export async function fetchWareHouseInventory(){
+  const data=await executeMssqlQuery(WAREHOUSE_WISE_INVENTORY);
+  return data;
 }
 
 // ─── Part Details (MySQL) ────────────────────────────────────────────────────

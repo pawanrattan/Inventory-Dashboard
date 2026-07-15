@@ -72,6 +72,68 @@ ORDER BY [Part No], [Part Description];';
 EXEC sp_executesql @SQL;
 `;
 
+// ─── Full BOM Details – All FG Bikes (MSSQL / SAP B1) ───────────────────────
+
+export const FULL_BOM_ALL_BIKES = `
+;WITH All_FG_Bikes AS (
+    SELECT
+        T0.Code AS FGCode,
+        T0.Name AS FGName,
+        T1.Code AS SFGCode
+    FROM OITT T0 WITH (NOLOCK)
+    INNER JOIN ITT1 T1 WITH (NOLOCK) ON T1.Father = T0.Code
+    WHERE T0.Code NOT LIKE '%_SFG'
+      AND T1.Code LIKE '%_SFG'
+      AND T0.TreeType = 'P'
+),
+SFG_Parts AS (
+    SELECT
+        FG.FGCode,
+        FG.FGName,
+        T1.Code AS ComponentCode,
+        T1.ItemName AS ComponentDescription,
+        T1.Quantity AS ComponentQty,
+        T1.IssueMthd AS IssueMethod,
+        'Semi-Finished BOM' AS Source
+    FROM All_FG_Bikes FG
+    INNER JOIN OITT T0 WITH (NOLOCK) ON T0.Code = FG.SFGCode
+    INNER JOIN ITT1 T1 WITH (NOLOCK) ON T1.Father = T0.Code
+),
+FG_Parts AS (
+    SELECT
+        FG.FGCode,
+        FG.FGName,
+        T1.Code AS ComponentCode,
+        T1.ItemName AS ComponentDescription,
+        T1.Quantity AS ComponentQty,
+        T1.IssueMthd AS IssueMethod,
+        'Finished BOM' AS Source
+    FROM All_FG_Bikes FG
+    INNER JOIN OITT T0 WITH (NOLOCK) ON T0.Code = FG.FGCode
+    INNER JOIN ITT1 T1 WITH (NOLOCK) ON T1.Father = T0.Code
+    WHERE T1.Code NOT LIKE '%_SFG'
+),
+Combined AS (
+    SELECT * FROM SFG_Parts
+    UNION ALL
+    SELECT * FROM FG_Parts
+)
+SELECT
+    FGCode AS [FG Code],
+    FGName AS [FG Description],
+    ComponentCode AS [Component Code],
+    ComponentDescription AS [Component Description],
+    SUM(ComponentQty) AS [BOM Qty],
+    MAX(IssueMethod) AS [Issue Method],
+    CASE
+        WHEN COUNT(*) > 1 THEN 'Both'
+        ELSE MAX(Source)
+    END AS [Source]
+FROM Combined
+GROUP BY FGCode, FGName, ComponentCode, ComponentDescription
+ORDER BY ComponentCode, FGCode
+`;
+
 // ─── Production Plan – Daily Breakdown (MySQL / inventory_dashboard) ─────────
 // Now handled by productionPlanRepository.ts using the monthly_production_plan
 // table with JSON `data` column. The old query is no longer needed.

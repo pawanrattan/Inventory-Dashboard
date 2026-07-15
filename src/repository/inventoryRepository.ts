@@ -7,7 +7,7 @@
 import { getMssqlPool } from "@/lib/mssqlDb";
 import { pool, RowDataPacket } from "@/lib/db";
 import { env } from "@/lib/env";
-import { WAREHOUSE_WISE_INVENTORY, BOM_PIVOT_RV_BIKES } from "@/lib/queries";
+import { WAREHOUSE_WISE_INVENTORY, BOM_PIVOT_RV_BIKES, FULL_BOM_ALL_BIKES } from "@/lib/queries";
 
 // ─── Current Inventory (MSSQL) ───────────────────────────────────────────────
 
@@ -71,6 +71,43 @@ export async function getWarehouseSnapshot(snapshotMonth: string, snapshotYear: 
 export async function fetchBomProcurementPlan() {
   const db = env.REVOLT_DB_NAME;
   const sql = `SELECT item_code, inventory_level, moq, supplier_name FROM ${db}.bom_procurement_plan`;
+  const [rows] = await pool.execute<RowDataPacket[]>(sql);
+  return rows;
+}
+
+// ─── Full BOM All Bikes (MSSQL) ─────────────────────────────────────────────
+
+export async function fetchFullBomAllBikes() {
+  const mssqlPool = await getMssqlPool();
+  const result = await mssqlPool.request().query(FULL_BOM_ALL_BIKES);
+  return result.recordset;
+}
+
+// ─── Part Details (MySQL) ────────────────────────────────────────────────────
+
+export async function fetchPartDetails() {
+  const sql = `
+    SELECT
+      n.name AS nature,
+      c.name AS category,
+      s.name AS supplier,
+      p.part_no,
+      p.part_description,
+      p.inventory_level,
+      p.moq
+    FROM part p
+    JOIN nature n ON p.nature_id = n.id
+    JOIN category c ON p.category_id = c.id
+    JOIN supplier s ON p.supplier_id = s.id
+  `;
+  const [rows] = await pool.execute<RowDataPacket[]>(sql);
+  return rows;
+}
+
+// ─── Bikes (MySQL) ──────────────────────────────────────────────────────────
+
+export async function fetchBikes() {
+  const sql = `SELECT bike_code, bike_name, bike_type FROM bike`;
   const [rows] = await pool.execute<RowDataPacket[]>(sql);
   return rows;
 }

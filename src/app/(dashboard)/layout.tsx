@@ -6,8 +6,8 @@ import Link from "next/link";
 import { useAuthStore } from "@/store/useAuthStore";
 
 const NAV_ITEMS = [
-  { href: "/monthly-procurement", label: "Monthly Procurement" },
-  { href: "/current-inventory", label: "Current Inventory" },
+  // { href: "/monthly-procurement", label: "Monthly Procurement" },
+  // { href: "/current-inventory", label: "Current Inventory" },
   { href: "/production-plan", label: "Production Plan" },
 ];
 
@@ -43,7 +43,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="topbar-inner">
           {/* Left: Brand + Nav */}
           <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
-            <Link href="/monthly-procurement" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 10 }}>
+            <Link href="/production-plan" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 10 }}>
               <img src="/images/revolt-motors-logo.png" alt="Revolt Motors" style={{ height: 28, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
               <span className="topbar-brand">Inventory Dashboard</span>
             </Link>

@@ -32,7 +32,7 @@ export default function LoginPage() {
       }
 
       setAuth(data.data.token, { name: data.data.user.name, email: data.data.user.email });
-      router.push("/monthly-procurement");
+      router.push("/production-plan");
     } catch {
       setError("Network error. Please try again.");
     } finally {

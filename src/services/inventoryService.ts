@@ -13,6 +13,7 @@ import {
   fetchFullBomAllBikes,
   fetchPartDetails,
   fetchBikes,
+  fetchProductionData,
   fetchWareHouseInventory,
 } from "@/repository/inventoryRepository";
 import { logger } from "@/lib/logger";
@@ -123,11 +124,12 @@ export async function getBomStockWithProductionPlan() {
 // ─── Full BOM with Part Details (MSSQL + MySQL) ─────────────────────────────
 
 export async function getFullBomWithPartDetails() {
-  const [bomData, partDetails, bikes,warehouseInventory] = await Promise.all([
+  const [bomData, partDetails, bikes, warehouseInventory, productionData] = await Promise.all([
     fetchFullBomAllBikes(),
     fetchPartDetails(),
     fetchBikes(),
-    fetchWareHouseInventory()
+    fetchWareHouseInventory(),
+    fetchProductionData(),
   ]);
 
   // Build lookup map from MySQL part details keyed by part_no
@@ -206,5 +208,5 @@ export async function getFullBomWithPartDetails() {
   
 
   logger.info(`InventoryService: Full BOM part-wise. Total parts: ${result.length}, Bikes in DB: ${bikes.length}`);
-  return result;
+  return { parts: result, productionData };
 }

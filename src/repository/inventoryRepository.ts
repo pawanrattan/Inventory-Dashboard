@@ -116,3 +116,20 @@ export async function fetchBikes() {
   const [rows] = await pool.execute<RowDataPacket[]>(sql);
   return rows;
 }
+
+// ─── Production Data (MySQL - revolt_sales_rawdata) ─────────────────────────
+
+export async function fetchProductionData() {
+  const db = "revolt_sales_rawdata";
+  const sql = `
+    SELECT
+      description,
+      YEAR(receipt_date) AS year,
+      MONTH(receipt_date) AS month,
+      COUNT(*) AS quantity
+    FROM ${db}.revolt_production
+    GROUP BY description, YEAR(receipt_date), MONTH(receipt_date)
+  `;
+  const [rows] = await pool.execute<RowDataPacket[]>(sql);
+  return rows;
+}
